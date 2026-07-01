@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MAWB Cargo Tracker</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --card: #1e293b;
+    --border: #334155;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+    --accent: #38bdf8;
+    --ok: #4ade80;
+    --err: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .card {
+    width: min(560px, 92vw);
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 32px;
+  }
+  h1 { margin: 0 0 4px; font-size: 22px; }
+  .sub { color: var(--muted); font-size: 14px; margin: 0 0 24px; }
+  .row { display: flex; gap: 10px; }
+  input {
+    flex: 1;
+    font-size: 18px;
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    letter-spacing: 1px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    outline: none;
+  }
+  input:focus { border-color: var(--accent); }
+  button {
+    padding: 12px 22px;
+    font-size: 16px;
+    font-weight: 600;
+    border: none;
+    border-radius: 10px;
+    background: var(--accent);
+    color: #04212e;
+    cursor: pointer;
+  }
+  button:hover { filter: brightness(1.1); }
+  .result {
+    margin-top: 20px;
+    padding: 16px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    font-size: 15px;
+    line-height: 1.6;
+    display: none;
+  }
+  .result.show { display: block; }
+  .result.error { border-color: var(--err); color: var(--err); }
+  .result .airline { font-size: 18px; font-weight: 700; color: var(--text); }
+  .result .meta { color: var(--muted); font-size: 13px; }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    margin-left: 8px;
+    vertical-align: middle;
+  }
+  .badge.ok { background: rgba(74,222,128,.15); color: var(--ok); }
+  .badge.warn { background: rgba(248,113,113,.15); color: var(--err); }
+  a.tracklink {
+    display: inline-block;
+    margin-top: 10px;
+    padding: 10px 18px;
+    border-radius: 10px;
+    background: var(--accent);
+    color: #04212e;
+    font-weight: 600;
+    text-decoration: none;
+  }
+  .hint { margin-top: 8px; font-size: 12px; color: var(--muted); }
+  .recent { margin-top: 24px; }
+  .recent h2 { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin: 0 0 8px; }
+  .recent button {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 13px;
+    font-weight: 400;
+    padding: 6px 12px;
+    margin: 0 6px 6px 0;
+  }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>✈️ MAWB Cargo Tracker</h1>
+  <p class="sub">Enter a Master Air Waybill number, e.g. <code>001-12345678</code></p>
+  <div class="row">
+    <input id="awb" placeholder="001-12345678" autofocus
+           autocomplete="off" spellcheck="false">
+    <button id="go">Track</button>
+  </div>
+  <div id="result" class="result"></div>
+  <div class="recent" id="recent"></div>
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// Airline database, keyed by 3-digit IATA airline prefix (accounting code).
+//
+//   name     – carrier name
+//   iata     – 2-letter airline code
+//   track    – URL of the carrier's cargo tracking page.
+//              Placeholders: {prefix} {serial} {awb} (awb = prefix-serial)
+//              Entries WITHOUT placeholders open the tracking page only;
+//              the AWB is copied to the clipboard so you can paste it.
+//
+// NOTE: deep-link URL formats change when airlines redesign their sites —
+// verify/refresh these periodically.
+// ---------------------------------------------------------------------------
+const AIRLINES = {
+  "001": { name: "American Airlines Cargo", iata: "AA", track: "https://www.aacargo.com/AACargo/tracking?awbNumber={serial}" },
+  "006": { name: "Delta Cargo",             iata: "DL", track: "https://www.deltacargo.com/Cargo/home/shipment-status?airbillNumber={prefix}-{serial}" },
+  "014": { name: "Air Canada Cargo",        iata: "AC", track: "https://www.aircanada.com/cargo/tracking" },
+  "016": { name: "United Cargo",            iata: "UA", track: "https://www.unitedcargo.com/en/us/track.html?awb={serial}" },
+  "020": { name: "Lufthansa Cargo",         iata: "LH", track: "https://www.lufthansa-cargo.com/eservices/etracking?awb={prefix}-{serial}" },
+  "023": { name: "FedEx (Air Cargo)",       iata: "FX", track: "https://www.fedex.com/fedextrack/?trknbr={prefix}{serial}" },
+  "057": { name: "Air France Cargo",        iata: "AF", track: "https://www.afklcargo.com/mycargo/shipment/singleshipment/{prefix}-{serial}" },
+  "074": { name: "KLM Cargo",               iata: "KL", track: "https://www.afklcargo.com/mycargo/shipment/singleshipment/{prefix}-{serial}" },
+  "086": { name: "Air New Zealand Cargo",   iata: "NZ", track: "https://www.airnewzealandcargo.com/track-your-cargo" },
+  "098": { name: "Air India Cargo",         iata: "AI", track: "https://www.airindia.com/in/en/business-solutions/cargo.html" },
+  "105": { name: "Finnair Cargo",           iata: "AY", track: "https://cargo.finnair.com/en/track-and-trace" },
+  "117": { name: "SAS Cargo",               iata: "SK", track: "https://www.sascargo.com/track/{prefix}-{serial}" },
+  "075": { name: "IAG Cargo (Iberia)",       iata: "IB", track: "https://www.iagcargo.com/en/" },
+  "125": { name: "IAG Cargo (British Airways)", iata: "BA", track: "https://www.iagcargo.com/en/" },
+  "131": { name: "Japan Airlines Cargo",    iata: "JL", track: "https://cargo.jal.co.jp/en/tracking/" },
+  "139": { name: "Aeroméxico Cargo",        iata: "AM", track: "https://www.aeromexicocargo.com/en/track-your-shipment/" },
+  "157": { name: "Qatar Airways Cargo",     iata: "QR", track: "https://www.qrcargo.com/s/track-your-shipment?documentType=MAWB&documentPrefix={prefix}&documentNumber={serial}" },
+  "160": { name: "Cathay Cargo",            iata: "CX", track: "https://www.cathaycargo.com/en-us/track-your-shipment.html?awb={prefix}-{serial}" },
+  "172": { name: "Cargolux",                iata: "CV", track: "https://www.cargolux.com/e-services/e-tracking?awb={prefix}-{serial}" },
+  "176": { name: "Emirates SkyCargo",       iata: "EK", track: "https://www.skycargo.com/track/?awb={prefix}-{serial}" },
+  "180": { name: "Korean Air Cargo",        iata: "KE", track: "https://cargo.koreanair.com/en/tracking" },
+  "205": { name: "ANA Cargo",               iata: "NH", track: "https://www.anacargo.jp/en/int/tracking/" },
+  "217": { name: "Thai Cargo",              iata: "TG", track: "https://www.thaicargo.com/en/track-trace" },
+  "232": { name: "MASkargo (Malaysia Airlines)", iata: "MH", track: "https://www.maskargo.com/track-and-trace/" },
+  "235": { name: "Turkish Cargo",           iata: "TK", track: "https://www.turkishcargo.com/en/online-services/shipment-tracking?awbNumber={prefix}-{serial}" },
+  "297": { name: "China Airlines Cargo",    iata: "CI", track: "https://cargo.china-airlines.com/ccnetv2/content/manage/ShipmentTracking.aspx" },
+  "369": { name: "Atlas Air",               iata: "5Y", track: "https://www.atlasair.com/tracking/" },
+  "403": { name: "Polar Air Cargo",         iata: "PO", track: "https://www.polaraircargo.com/tracking/" },
+  "406": { name: "UPS Airlines",            iata: "5X", track: "https://www.ups.com/track?tracknum={prefix}{serial}" },
+  "555": { name: "Aeroflot Cargo",          iata: "SU", track: "https://www.aeroflot.ru/cargo" },
+  "607": { name: "Etihad Cargo",            iata: "EY", track: "https://www.etihadcargo.com/en/e-services/track-your-shipment?awb={prefix}-{serial}" },
+  "618": { name: "Singapore Airlines Cargo", iata: "SQ", track: "https://www.siacargo.com/ccn/ShipmentTrack.aspx?awbNo={prefix}-{serial}" },
+  "695": { name: "EVA Air Cargo",           iata: "BR", track: "https://www.brcargo.com/NPassCargo/subpage/tracking.aspx" },
+  "731": { name: "Xiamen Airlines Cargo",   iata: "MF", track: "https://cargo.xiamenair.com/" },
+  "738": { name: "Vietnam Airlines Cargo",  iata: "VN", track: "https://www.vietnamairlines.com/vn/en/vna-cargo" },
+  "781": { name: "China Eastern Air Cargo", iata: "MU", track: "https://www.ceair.com/cargo/" },
+  "784": { name: "China Southern Cargo",    iata: "CZ", track: "https://cargo.csair.com/" },
+  "880": { name: "Hainan Airlines Cargo",   iata: "HU", track: "https://www.hnacargo.com/" },
+  "932": { name: "Virgin Atlantic Cargo",   iata: "VS", track: "https://www.virginatlanticcargo.com/gb/en/tracking.html" },
+  "988": { name: "Asiana Cargo",            iata: "OZ", track: "https://www.asianacargo.com/tracking/viewTraceAirWaybill.do" },
+  "999": { name: "Air China Cargo",         iata: "CA", track: "https://www.airchinacargo.com/en/search_order.php" },
+};
+
+// Universal fallback when the prefix isn't in the database yet.
+const FALLBACK_TRACKER = "https://www.track-trace.com/aircargo";
+
+const $awb = document.getElementById("awb");
+const $result = document.getElementById("result");
+const $recent = document.getElementById("recent");
+
+function parseAWB(raw) {
+  const digits = raw.replace(/\D/g, "");
+  if (digits.length !== 11) {
+    return { error: "A MAWB has 11 digits (3-digit airline prefix + 8-digit number). Got " + digits.length + "." };
+  }
+  const prefix = digits.slice(0, 3);
+  const serial8 = digits.slice(3);          // 7-digit serial + 1 check digit
+  const serial7 = parseInt(serial8.slice(0, 7), 10);
+  const checkDigit = parseInt(serial8.slice(7), 10);
+  const checkOK = serial7 % 7 === checkDigit;
+  return { prefix, serial: serial8, awb: prefix + "-" + serial8, checkOK };
+}
+
+function buildURL(template, p) {
+  return template
+    .replaceAll("{prefix}", p.prefix)
+    .replaceAll("{serial}", p.serial)
+    .replaceAll("{awb}", p.awb);
+}
+
+function track() {
+  const p = parseAWB($awb.value);
+  $result.className = "result show";
+
+  if (p.error) {
+    $result.classList.add("error");
+    $result.textContent = "⚠ " + p.error;
+    return;
+  }
+
+  const airline = AIRLINES[p.prefix];
+  const checkBadge = p.checkOK
+    ? '<span class="badge ok">check digit ✓</span>'
+    : '<span class="badge warn">check digit ✗ — possible typo</span>';
+
+  if (!airline) {
+    $result.innerHTML =
+      '<div class="airline">Unknown prefix ' + p.prefix + checkBadge + "</div>" +
+      '<div class="meta">' + p.awb + " — prefix not in database yet</div>" +
+      '<a class="tracklink" href="' + FALLBACK_TRACKER + '" target="_blank">Search on track-trace.com →</a>' +
+      '<div class="hint">AWB copied to clipboard — paste it on the tracking site.</div>';
+  } else {
+    const url = airline.track ? buildURL(airline.track, p) : FALLBACK_TRACKER;
+    const prefilled = airline.track && airline.track.includes("{");
+    $result.innerHTML =
+      '<div class="airline">' + airline.name + " (" + airline.iata + ")" + checkBadge + "</div>" +
+      '<div class="meta">' + p.awb + "</div>" +
+      '<a class="tracklink" href="' + url + '" target="_blank">Track on ' + airline.name + " →</a>" +
+      (prefilled
+        ? '<div class="hint">Opens with the AWB pre-filled. Also copied to clipboard just in case.</div>'
+        : '<div class="hint">This carrier’s site doesn’t accept URL pre-fill — AWB copied to clipboard, paste it there.</div>');
+  }
+
+  navigator.clipboard && navigator.clipboard.writeText(p.awb).catch(() => {});
+  saveRecent(p.awb);
+  renderRecent();
+}
+
+// --- recent searches (localStorage) ---
+function saveRecent(awb) {
+  let list = JSON.parse(localStorage.getItem("recentAWBs") || "[]");
+  list = [awb, ...list.filter(x => x !== awb)].slice(0, 6);
+  localStorage.setItem("recentAWBs", JSON.stringify(list));
+}
+function renderRecent() {
+  const list = JSON.parse(localStorage.getItem("recentAWBs") || "[]");
+  $recent.innerHTML = list.length
+    ? "<h2>Recent</h2>" + list.map(a => '<button data-awb="' + a + '">' + a + "</button>").join("")
+    : "";
+}
+$recent.addEventListener("click", e => {
+  if (e.target.dataset.awb) { $awb.value = e.target.dataset.awb; track(); }
+});
+
+// auto-format as XXX-XXXXXXXX while typing
+$awb.addEventListener("input", () => {
+  const d = $awb.value.replace(/\D/g, "").slice(0, 11);
+  $awb.value = d.length > 3 ? d.slice(0, 3) + "-" + d.slice(3) : d;
+});
+
+document.getElementById("go").addEventListener("click", track);
+$awb.addEventListener("keydown", e => { if (e.key === "Enter") track(); });
+renderRecent();
+</script>
+</body>
+</html>
