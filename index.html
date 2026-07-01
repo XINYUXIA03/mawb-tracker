@@ -36,7 +36,7 @@
   h1 { margin: 0 0 4px; font-size: 22px; }
   .sub { color: var(--muted); font-size: 14px; margin: 0 0 24px; }
   .row { display: flex; gap: 10px; }
-  input {
+  input[type=text] {
     flex: 1;
     font-size: 18px;
     font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
@@ -48,8 +48,8 @@
     color: var(--text);
     outline: none;
   }
-  input:focus { border-color: var(--accent); }
-  button {
+  input[type=text]:focus { border-color: var(--accent); }
+  button.primary {
     padding: 12px 22px;
     font-size: 16px;
     font-weight: 600;
@@ -59,7 +59,7 @@
     color: #04212e;
     cursor: pointer;
   }
-  button:hover { filter: brightness(1.1); }
+  button.primary:hover { filter: brightness(1.1); }
   .result {
     margin-top: 20px;
     padding: 16px;
@@ -84,16 +84,19 @@
   }
   .badge.ok { background: rgba(74,222,128,.15); color: var(--ok); }
   .badge.warn { background: rgba(248,113,113,.15); color: var(--err); }
-  a.tracklink {
+  .actions { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .actions a, .actions button.alt {
     display: inline-block;
-    margin-top: 10px;
-    padding: 10px 18px;
+    padding: 10px 16px;
     border-radius: 10px;
-    background: var(--accent);
-    color: #04212e;
+    font-size: 14px;
     font-weight: 600;
     text-decoration: none;
+    cursor: pointer;
+    border: none;
   }
+  .btn-main { background: var(--accent); color: #04212e; }
+  .btn-sec { background: transparent; color: var(--accent); border: 1px solid var(--accent) !important; }
   .hint { margin-top: 8px; font-size: 12px; color: var(--muted); }
   .recent { margin-top: 24px; }
   .recent h2 { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin: 0 0 8px; }
@@ -103,20 +106,21 @@
     color: var(--text);
     font-family: ui-monospace, Consolas, monospace;
     font-size: 13px;
-    font-weight: 400;
     padding: 6px 12px;
     margin: 0 6px 6px 0;
+    border-radius: 8px;
+    cursor: pointer;
   }
 </style>
 </head>
 <body>
 <div class="card">
   <h1>✈️ MAWB Cargo Tracker</h1>
-  <p class="sub">Enter a Master Air Waybill number, e.g. <code>001-12345678</code></p>
+  <p class="sub">Enter a Master Air Waybill number, e.g. <code>001-12345675</code>. Tracking opens automatically in a new tab.</p>
   <div class="row">
-    <input id="awb" placeholder="001-12345678" autofocus
+    <input id="awb" type="text" placeholder="001-12345678" autofocus
            autocomplete="off" spellcheck="false">
-    <button id="go">Track</button>
+    <button id="go" class="primary">Track</button>
   </div>
   <div id="result" class="result"></div>
   <div class="recent" id="recent"></div>
@@ -124,64 +128,277 @@
 
 <script>
 // ---------------------------------------------------------------------------
-// Airline database, keyed by 3-digit IATA airline prefix (accounting code).
+// Airline database keyed by 3-digit AWB prefix. Source: utopiax.org listing.
+// Format: prefix: [ name, IATA code, officialTrackURL ]
 //
-//   name     – carrier name
-//   iata     – 2-letter airline code
-//   track    – URL of the carrier's cargo tracking page.
-//              Placeholders: {prefix} {serial} {awb} (awb = prefix-serial)
-//              Entries WITHOUT placeholders open the tracking page only;
-//              the AWB is copied to the clipboard so you can paste it.
-//
-// NOTE: deep-link URL formats change when airlines redesign their sites —
-// verify/refresh these periodically.
+// officialTrackURL:
+//   - contains {prefix}/{serial}/{awb} -> deep link that auto-searches on the
+//     airline's own site; opened automatically on Track.
+//   - plain URL                        -> airline tracking page (no prefill);
+//     shown as a secondary button, AWB copied to clipboard.
+//   - ""                               -> no official link known yet.
+// Every airline additionally gets automatic search via track-trace.com
+// (hidden POST form, see openTrackTrace below).
 // ---------------------------------------------------------------------------
 const AIRLINES = {
-  "001": { name: "American Airlines Cargo", iata: "AA", track: "https://www.aacargo.com/AACargo/tracking?awbNumber={serial}" },
-  "006": { name: "Delta Cargo",             iata: "DL", track: "https://www.deltacargo.com/Cargo/home/shipment-status?airbillNumber={prefix}-{serial}" },
-  "014": { name: "Air Canada Cargo",        iata: "AC", track: "https://www.aircanada.com/cargo/tracking" },
-  "016": { name: "United Cargo",            iata: "UA", track: "https://www.unitedcargo.com/en/us/track.html?awb={serial}" },
-  "020": { name: "Lufthansa Cargo",         iata: "LH", track: "https://www.lufthansa-cargo.com/eservices/etracking?awb={prefix}-{serial}" },
-  "023": { name: "FedEx (Air Cargo)",       iata: "FX", track: "https://www.fedex.com/fedextrack/?trknbr={prefix}{serial}" },
-  "057": { name: "Air France Cargo",        iata: "AF", track: "https://www.afklcargo.com/mycargo/shipment/singleshipment/{prefix}-{serial}" },
-  "074": { name: "KLM Cargo",               iata: "KL", track: "https://www.afklcargo.com/mycargo/shipment/singleshipment/{prefix}-{serial}" },
-  "086": { name: "Air New Zealand Cargo",   iata: "NZ", track: "https://www.airnewzealandcargo.com/track-your-cargo" },
-  "098": { name: "Air India Cargo",         iata: "AI", track: "https://www.airindia.com/in/en/business-solutions/cargo.html" },
-  "105": { name: "Finnair Cargo",           iata: "AY", track: "https://cargo.finnair.com/en/track-and-trace" },
-  "117": { name: "SAS Cargo",               iata: "SK", track: "https://www.sascargo.com/track/{prefix}-{serial}" },
-  "075": { name: "IAG Cargo (Iberia)",       iata: "IB", track: "https://www.iagcargo.com/en/" },
-  "125": { name: "IAG Cargo (British Airways)", iata: "BA", track: "https://www.iagcargo.com/en/" },
-  "131": { name: "Japan Airlines Cargo",    iata: "JL", track: "https://cargo.jal.co.jp/en/tracking/" },
-  "139": { name: "Aeroméxico Cargo",        iata: "AM", track: "https://www.aeromexicocargo.com/en/track-your-shipment/" },
-  "157": { name: "Qatar Airways Cargo",     iata: "QR", track: "https://www.qrcargo.com/s/track-your-shipment?documentType=MAWB&documentPrefix={prefix}&documentNumber={serial}" },
-  "160": { name: "Cathay Cargo",            iata: "CX", track: "https://www.cathaycargo.com/en-us/track-your-shipment.html?awb={prefix}-{serial}" },
-  "172": { name: "Cargolux",                iata: "CV", track: "https://www.cargolux.com/e-services/e-tracking?awb={prefix}-{serial}" },
-  "176": { name: "Emirates SkyCargo",       iata: "EK", track: "https://www.skycargo.com/track/?awb={prefix}-{serial}" },
-  "180": { name: "Korean Air Cargo",        iata: "KE", track: "https://cargo.koreanair.com/en/tracking" },
-  "205": { name: "ANA Cargo",               iata: "NH", track: "https://www.anacargo.jp/en/int/tracking/" },
-  "217": { name: "Thai Cargo",              iata: "TG", track: "https://www.thaicargo.com/en/track-trace" },
-  "232": { name: "MASkargo (Malaysia Airlines)", iata: "MH", track: "https://www.maskargo.com/track-and-trace/" },
-  "235": { name: "Turkish Cargo",           iata: "TK", track: "https://www.turkishcargo.com/en/online-services/shipment-tracking?awbNumber={prefix}-{serial}" },
-  "297": { name: "China Airlines Cargo",    iata: "CI", track: "https://cargo.china-airlines.com/ccnetv2/content/manage/ShipmentTracking.aspx" },
-  "369": { name: "Atlas Air",               iata: "5Y", track: "https://www.atlasair.com/tracking/" },
-  "403": { name: "Polar Air Cargo",         iata: "PO", track: "https://www.polaraircargo.com/tracking/" },
-  "406": { name: "UPS Airlines",            iata: "5X", track: "https://www.ups.com/track?tracknum={prefix}{serial}" },
-  "555": { name: "Aeroflot Cargo",          iata: "SU", track: "https://www.aeroflot.ru/cargo" },
-  "607": { name: "Etihad Cargo",            iata: "EY", track: "https://www.etihadcargo.com/en/e-services/track-your-shipment?awb={prefix}-{serial}" },
-  "618": { name: "Singapore Airlines Cargo", iata: "SQ", track: "https://www.siacargo.com/ccn/ShipmentTrack.aspx?awbNo={prefix}-{serial}" },
-  "695": { name: "EVA Air Cargo",           iata: "BR", track: "https://www.brcargo.com/NPassCargo/subpage/tracking.aspx" },
-  "731": { name: "Xiamen Airlines Cargo",   iata: "MF", track: "https://cargo.xiamenair.com/" },
-  "738": { name: "Vietnam Airlines Cargo",  iata: "VN", track: "https://www.vietnamairlines.com/vn/en/vna-cargo" },
-  "781": { name: "China Eastern Air Cargo", iata: "MU", track: "https://www.ceair.com/cargo/" },
-  "784": { name: "China Southern Cargo",    iata: "CZ", track: "https://cargo.csair.com/" },
-  "880": { name: "Hainan Airlines Cargo",   iata: "HU", track: "https://www.hnacargo.com/" },
-  "932": { name: "Virgin Atlantic Cargo",   iata: "VS", track: "https://www.virginatlanticcargo.com/gb/en/tracking.html" },
-  "988": { name: "Asiana Cargo",            iata: "OZ", track: "https://www.asianacargo.com/tracking/viewTraceAirWaybill.do" },
-  "999": { name: "Air China Cargo",         iata: "CA", track: "https://www.airchinacargo.com/en/search_order.php" },
+  "001": ["American Airlines", "AA", "https://www.aacargo.com/AACargo/tracking"],
+  "003": ["CMA CGM Air Cargo", "2C", ""],
+  "006": ["Delta Cargo", "DL", "https://www.deltacargo.com/Cargo/home/shipment-status?airbillNumber={prefix}-{serial}"],
+  "013": ["Gabon Airlines", "GY", ""],
+  "014": ["Air Canada Cargo", "AC", "https://www.aircanada.com/cargo/tracking"],
+  "016": ["United Cargo", "UA", "https://www.unitedcargo.com/en/us/track.html"],
+  "018": ["Juneyao Air", "HO", ""],
+  "020": ["Lufthansa Cargo", "LH", "https://www.lufthansa-cargo.com/eservices/etracking?awb={prefix}-{serial}"],
+  "023": ["FedEx", "FX", "https://www.fedex.com/fedextrack/?trknbr={prefix}{serial}"],
+  "027": ["Alaska Airlines", "AS", ""],
+  "040": ["Camair-Co", "QC", ""],
+  "042": ["VARIG", "RG", ""],
+  "043": ["Dragonair (Cathay Dragon)", "KA", ""],
+  "044": ["Aerolineas Argentinas", "AR", ""],
+  "045": ["LATAM Airlines", "LA", ""],
+  "047": ["TAP Air Portugal", "TP", ""],
+  "048": ["Cyprus Airways", "CY", ""],
+  "050": ["Olympic Airways", "OA", ""],
+  "053": ["Aer Lingus Cargo", "EI", ""],
+  "055": ["ITA Airways Cargo (Alitalia)", "AZ", ""],
+  "057": ["Air France Cargo", "AF", "https://www.afklcargo.com/mycargo/shipment/singleshipment/{prefix}-{serial}"],
+  "061": ["Air Seychelles", "HM", ""],
+  "064": ["Czech Airlines", "OK", ""],
+  "065": ["Saudia Cargo", "SV", ""],
+  "070": ["Syrian Arab Airlines", "RB", ""],
+  "071": ["Ethiopian Airlines", "ET", ""],
+  "072": ["Gulf Air", "GF", ""],
+  "074": ["KLM Cargo", "KL", "https://www.afklcargo.com/mycargo/shipment/singleshipment/{prefix}-{serial}"],
+  "075": ["IAG Cargo (Iberia)", "IB", "https://www.iagcargo.com/en/"],
+  "076": ["Middle East Airlines", "ME", ""],
+  "077": ["Egyptair", "MS", ""],
+  "079": ["Philippine Airlines", "PR", ""],
+  "080": ["LOT Polish Airlines", "LO", ""],
+  "081": ["Qantas Freight", "QF", ""],
+  "082": ["Brussels Airlines", "SN", ""],
+  "083": ["South African Airways", "SA", ""],
+  "086": ["Air New Zealand Cargo", "NZ", "https://www.airnewzealandcargo.com/track-your-cargo"],
+  "091": ["AirAsia India", "I5", ""],
+  "096": ["Iran Air", "IR", ""],
+  "098": ["Air India Cargo", "AI", ""],
+  "105": ["Finnair Cargo", "AY", "https://cargo.finnair.com/en/track-and-trace"],
+  "106": ["Caribbean Airlines", "BW", ""],
+  "108": ["Icelandair Cargo", "FI", ""],
+  "111": ["Bahamasair", "UP", ""],
+  "112": ["China Cargo Airlines", "CK", ""],
+  "114": ["EL AL Cargo", "LY", ""],
+  "115": ["Air Serbia", "JU", ""],
+  "117": ["SAS Cargo", "SK", "https://www.sascargo.com/"],
+  "118": ["TAAG Angola Airlines", "DT", ""],
+  "124": ["Air Algerie", "AH", ""],
+  "125": ["IAG Cargo (British Airways)", "BA", "https://www.iagcargo.com/en/"],
+  "126": ["Garuda Indonesia", "GA", ""],
+  "127": ["GOL Airlines", "G3", ""],
+  "128": ["Hong Kong Express", "UO", ""],
+  "129": ["Martinair Cargo", "MP", "https://www.afklcargo.com/mycargo/shipment/singleshipment/{prefix}-{serial}"],
+  "130": ["FlyOne", "5F", ""],
+  "131": ["Japan Airlines Cargo", "JL", "https://cargo.jal.co.jp/en/tracking/"],
+  "133": ["LACSA Costa Rica", "LR", ""],
+  "134": ["Avianca Cargo", "AV", ""],
+  "136": ["Cubana de Aviacion", "CU", ""],
+  "137": ["MCS Aerocarga de Mexico", "T8", ""],
+  "139": ["Aeromexico Cargo", "AM", "https://www.aeromexicocargo.com/en/track-your-shipment/"],
+  "140": ["LIAT Airlines", "LI", ""],
+  "141": ["flydubai cargo", "FZ", ""],
+  "142": ["Air Belgium", "KF", ""],
+  "145": ["LATAM Cargo Chile", "UC", ""],
+  "147": ["Royal Air Maroc", "AT", ""],
+  "155": ["DHL Aviation", "ES", ""],
+  "157": ["Qatar Airways Cargo", "QR", "https://www.qrcargo.com/s/track-your-shipment?documentType=MAWB&documentPrefix={prefix}&documentNumber={serial}"],
+  "160": ["Cathay Cargo", "CX", "https://www.cathaycargo.com/en-us/track-and-trace.html"],
+  "172": ["Cargolux", "CV", "https://www.cargolux.com/e-services/e-tracking"],
+  "173": ["Hawaiian Airlines", "HA", ""],
+  "174": ["LAS Cargo", "4L", ""],
+  "176": ["Emirates SkyCargo", "EK", "https://www.skycargo.com/track/?awb={prefix}-{serial}"],
+  "180": ["Korean Air Cargo", "KE", "https://cargo.koreanair.com/en/tracking"],
+  "183": ["VARIG", "RG", ""],
+  "186": ["Air Namibia", "SW", ""],
+  "189": ["Starlux Cargo", "JX", ""],
+  "199": ["Tunisair", "TU", ""],
+  "202": ["TACA", "TA", ""],
+  "203": ["Cebu Pacific", "5J", ""],
+  "205": ["ANA Cargo", "NH", "https://www.anacargo.jp/en/int/tracking/"],
+  "214": ["Pakistan Int'l Airlines", "PK", ""],
+  "217": ["Thai Cargo", "TG", "https://www.thaicargo.com/en/track-trace"],
+  "228": ["Vistara Cargo", "UK", ""],
+  "229": ["Kuwait Airways", "KU", ""],
+  "230": ["Copa Airlines Cargo", "CM", ""],
+  "232": ["MASkargo (Malaysia Airlines)", "MH", "https://www.maskargo.com/track-and-trace/"],
+  "233": ["MSC Air Cargo", "CP", ""],
+  "235": ["Turkish Cargo", "TK", "https://www.turkishcargo.com/en/online-services/shipment-tracking?awbNumber={prefix}-{serial}"],
+  "239": ["Air Mauritius", "MK", ""],
+  "242": ["Stabo Air", "4E", ""],
+  "244": ["Air Tahiti Nui", "TN", ""],
+  "250": ["Uzbekistan Airways", "HY", ""],
+  "254": ["Jet Club", "0J", ""],
+  "258": ["Air Madagascar", "MD", ""],
+  "260": ["Fiji Airways", "FJ", ""],
+  "262": ["Ural Airlines Cargo", "U6", ""],
+  "272": ["Kalitta Air", "K4", ""],
+  "281": ["Tarom", "RO", ""],
+  "284": ["Wizz Air", "W6", ""],
+  "288": ["Air Hong Kong", "LD", ""],
+  "297": ["China Airlines Cargo", "CI", "https://cargo.china-airlines.com/ccnetv2/content/manage/ShipmentTracking.aspx"],
+  "301": ["Global Aviation and Services", "5S", ""],
+  "302": ["SkyWest Airlines", "OO", ""],
+  "312": ["IndiGo CarGo", "6E", ""],
+  "321": ["Starlight Airlines", "QP", ""],
+  "324": ["Shandong Airlines", "SC", ""],
+  "328": ["Norwegian Air Shuttle", "DY", ""],
+  "331": ["SATA International (Azores)", "S4", ""],
+  "345": ["Northern Air Cargo", "NC", ""],
+  "350": ["Air Premia", "YP", ""],
+  "354": ["Cobaltair", "CO", ""],
+  "355": ["Estafeta Carga Aerea", "E7", ""],
+  "356": ["Cargolux Italia", "C8", ""],
+  "358": ["SkyGreece Airlines", "GW", ""],
+  "369": ["Atlas Air", "5Y", "https://www.atlasair.com/tracking/"],
+  "375": ["Jetstar Asia", "3K", ""],
+  "377": ["WOW Air", "WW", ""],
+  "378": ["Cayman Airways", "KX", ""],
+  "390": ["Aegean Airlines", "A3", ""],
+  "403": ["Polar Air Cargo", "PO", "https://www.polaraircargo.com/tracking/"],
+  "406": ["UPS Air Cargo", "5X", "https://www.ups.com/track?tracknum={prefix}{serial}"],
+  "416": ["National Air Cargo", "N8", ""],
+  "417": ["Bringer Air Cargo", "E6", ""],
+  "421": ["S7 Airlines", "S7", ""],
+  "423": ["DHL Aviation", "ER", ""],
+  "439": ["Aigle Azur", "ZI", ""],
+  "456": ["TransCaribbean Cargo", "CB", ""],
+  "459": ["RwandAir", "WB", ""],
+  "462": ["LAN Ecuador", "XL", ""],
+  "463": ["Silk Way Airlines", "ZP", ""],
+  "465": ["Air Astana", "KC", ""],
+  "473": ["XL Airways France", "SE", ""],
+  "479": ["Shenzhen Airlines", "ZH", ""],
+  "485": ["Astral Aviation", "8V", ""],
+  "489": ["Cargojet Airways", "W8", ""],
+  "490": ["Air Senegal", "HC", ""],
+  "501": ["Silk Way West Airlines", "7L", ""],
+  "503": ["Corendon Airlines", "CD", ""],
+  "506": ["Norse Atlantic Airways", "N0", ""],
+  "508": ["Jet Airways Inc. (US)", "QJ", ""],
+  "510": ["Airclass Lineas Aereas", "VZ", ""],
+  "512": ["Royal Jordanian", "RJ", ""],
+  "514": ["Air Arabia", "G9", ""],
+  "519": ["Niger Air Cargo", "NO", ""],
+  "525": ["Uni Air", "B7", ""],
+  "526": ["Southwest Airlines", "WN", ""],
+  "530": ["TACA Peru", "T0", ""],
+  "535": ["Jubba Airways", "3J", ""],
+  "536": ["Norse Atlantic UK", "Z0", ""],
+  "537": ["Mahan Airlines", "W5", ""],
+  "539": ["Raya Airways", "TH", ""],
+  "542": ["Turkmenistan Airlines", "T5", ""],
+  "543": ["AerCaribe", "JK", ""],
+  "549": ["LATAM Cargo Brasil (ABSA)", "M3", ""],
+  "555": ["Aeroflot Cargo", "SU", ""],
+  "560": ["CargoLogicAir", "P3", ""],
+  "566": ["Ukraine Int'l Airlines", "PS", ""],
+  "572": ["Air Moldova", "9U", ""],
+  "574": ["Allied Air", "4W", ""],
+  "575": ["Coyne Airways", "7C", ""],
+  "576": ["Skylease Cargo", "KY", ""],
+  "577": ["Azul Cargo", "AD", ""],
+  "580": ["AirBridgeCargo", "RU", ""],
+  "585": ["My Indo Airlines", "2Y", ""],
+  "589": ["Jet Airways", "9W", ""],
+  "596": ["Nok Air", "DD", ""],
+  "603": ["SriLankan Cargo", "UL", ""],
+  "607": ["Etihad Cargo", "EY", "https://www.etihadcargo.com/en/e-services/track-your-shipment?awb={prefix}-{serial}"],
+  "612": ["TUI Airlines", "TB", ""],
+  "615": ["DHL / European Air Transport", "QY", ""],
+  "618": ["Singapore Airlines Cargo", "SQ", "https://www.siacargo.com/ccn/ShipmentTrack.aspx?awbNo={prefix}-{serial}"],
+  "622": ["Calm Air", "MO", ""],
+  "623": ["Bulgaria Air", "FB", ""],
+  "624": ["Pegasus Cargo", "PC", ""],
+  "628": ["Belavia", "B2", ""],
+  "629": ["SilkAir", "MI", ""],
+  "630": ["Sunclass Airlines", "DK", ""],
+  "631": ["Air Greenland", "GL", ""],
+  "635": ["Yemenia Yemen Airways", "IY", ""],
+  "636": ["Air Botswana", "BP", ""],
+  "643": ["Air Malta", "KM", ""],
+  "644": ["Solar Cargo", "4S", ""],
+  "649": ["Air Transat", "TS", ""],
+  "656": ["Air Niugini", "PX", ""],
+  "657": ["Air Baltic", "BT", ""],
+  "658": ["Airmax Cargo", "X8", ""],
+  "672": ["Royal Brunei Airlines", "BI", ""],
+  "675": ["Air Macau", "NX", ""],
+  "687": ["Aloha Air Cargo", "KH", ""],
+  "695": ["EVA Air Cargo", "BR", "https://www.brcargo.com/NPassCargo/subpage/tracking.aspx"],
+  "699": ["Uni-Top Airlines", "UW", ""],
+  "700": ["Challenge Airlines IL", "5C", ""],
+  "703": ["Neos SPA", "NO", ""],
+  "706": ["Kenya Airways", "KQ", ""],
+  "711": ["ACTC", "MR", ""],
+  "716": ["MNG Airlines", "MB", ""],
+  "724": ["Swiss WorldCargo", "LX", ""],
+  "729": ["Tampa Cargo", "QT", ""],
+  "731": ["XiamenAir Cargo", "MF", ""],
+  "737": ["SATA Air Acores", "SP", ""],
+  "738": ["Vietnam Airlines Cargo", "VN", ""],
+  "744": ["Challenge Airlines BE", "X7", ""],
+  "752": ["Challenge Airlines MT", "X6", ""],
+  "754": ["Jetairfly", "TB", ""],
+  "756": ["ASL Airlines Belgium (ex-TNT)", "3V", ""],
+  "762": ["Norwegian Air UK", "DI", ""],
+  "771": ["Azerbaijan Airlines", "J2", ""],
+  "774": ["Shanghai Airlines", "FM", ""],
+  "775": ["SpiceJet", "SG", ""],
+  "781": ["China Eastern Air Cargo", "MU", ""],
+  "783": ["Iberojet", "E9", ""],
+  "784": ["China Southern Cargo", "CZ", ""],
+  "803": ["Mandarin Airlines", "AE", ""],
+  "805": ["Mercury Americas", "4X", ""],
+  "806": ["Jeju Air", "7C", ""],
+  "807": ["AirAsia Berhad", "AK", ""],
+  "810": ["Amerijet International", "M6", ""],
+  "816": ["Malindo Airways", "OD", ""],
+  "817": ["SAC South American Airways", "S6", ""],
+  "826": ["Tianjin Airlines", "GS", ""],
+  "827": ["RUS Aviation", "R4", ""],
+  "828": ["Hong Kong Air Cargo", "RH", ""],
+  "829": ["Bangkok Airways", "PG", ""],
+  "831": ["Croatia Airlines", "OU", ""],
+  "832": ["ABX Air", "GB", ""],
+  "838": ["WestJet Cargo", "WS", ""],
+  "843": ["AirAsia X", "D7", ""],
+  "851": ["Hong Kong Airlines", "HX", ""],
+  "865": ["MASAir", "M7", ""],
+  "871": ["Suparna (Yangtze River Express)", "Y8", ""],
+  "873": ["AeroUnion", "6R", ""],
+  "876": ["Sichuan Airlines", "3U", ""],
+  "880": ["Hainan Airlines Cargo", "HU", ""],
+  "881": ["Condor", "DE", ""],
+  "901": ["TAB Bolivia", "B1", ""],
+  "910": ["Oman Air Cargo", "WY", ""],
+  "921": ["SF Airlines", "O3", ""],
+  "923": ["Corsair", "SS", ""],
+  "932": ["Virgin Atlantic Cargo", "VS", "https://www.virginatlanticcargo.com/gb/en/tracking.html"],
+  "933": ["Nippon Cargo Airlines", "KZ", ""],
+  "936": ["DHL Aviation", "D0", ""],
+  "946": ["Vensecar Internacional", "V4", ""],
+  "957": ["LATAM Airlines Brasil", "JJ", ""],
+  "958": ["Insel Air Cargo", "7I", ""],
+  "960": ["Estonian Air", "OV", ""],
+  "961": ["Lanmei Airlines", "LQ", ""],
+  "976": ["LATAM Cargo Colombia", "L7", ""],
+  "978": ["Vietjet", "VJ", ""],
+  "985": ["LATAM Cargo Colombia", "L7", ""],
+  "988": ["Asiana Cargo", "OZ", ""],
+  "992": ["DHL Aero Expreso", "D5", ""],
+  "994": ["Air Incheon", "KJ", ""],
+  "996": ["Air Europa Cargo", "UX", ""],
+  "997": ["Biman Bangladesh", "BG", ""],
+  "999": ["Air China Cargo", "CA", ""],
 };
-
-// Universal fallback when the prefix isn't in the database yet.
-const FALLBACK_TRACKER = "https://www.track-trace.com/aircargo";
 
 const $awb = document.getElementById("awb");
 const $result = document.getElementById("result");
@@ -207,6 +424,23 @@ function buildURL(template, p) {
     .replaceAll("{awb}", p.awb);
 }
 
+// Auto-search on track-trace.com: submit their tracking form (POST) in a new
+// tab. Works for every airline track-trace supports, no pasting needed.
+function openTrackTrace(awb) {
+  const f = document.createElement("form");
+  f.method = "POST";
+  f.action = "https://www.track-trace.com/aircargo";
+  f.target = "_blank";
+  [["number", awb], ["config", "206300"], ["commit", "Track with options"]].forEach(([n, v]) => {
+    const i = document.createElement("input");
+    i.type = "hidden"; i.name = n; i.value = v;
+    f.appendChild(i);
+  });
+  document.body.appendChild(f);
+  f.submit();
+  f.remove();
+}
+
 function track() {
   const p = parseAWB($awb.value);
   $result.className = "result show";
@@ -217,28 +451,41 @@ function track() {
     return;
   }
 
-  const airline = AIRLINES[p.prefix];
+  const a = AIRLINES[p.prefix];
+  const name = a ? a[0] : "Unknown airline";
+  const iata = a ? a[1] : "prefix " + p.prefix;
+  const official = a && a[2] ? buildURL(a[2], p) : "";
+  const isDeepLink = a && a[2] && a[2].includes("{");
+
   const checkBadge = p.checkOK
     ? '<span class="badge ok">check digit ✓</span>'
     : '<span class="badge warn">check digit ✗ — possible typo</span>';
 
-  if (!airline) {
-    $result.innerHTML =
-      '<div class="airline">Unknown prefix ' + p.prefix + checkBadge + "</div>" +
-      '<div class="meta">' + p.awb + " — prefix not in database yet</div>" +
-      '<a class="tracklink" href="' + FALLBACK_TRACKER + '" target="_blank">Search on track-trace.com →</a>' +
-      '<div class="hint">AWB copied to clipboard — paste it on the tracking site.</div>';
+  // Auto-open the search (user click = popup allowed):
+  // official deep link if we have one, otherwise track-trace auto-search.
+  if (isDeepLink) {
+    window.open(official, "_blank");
   } else {
-    const url = airline.track ? buildURL(airline.track, p) : FALLBACK_TRACKER;
-    const prefilled = airline.track && airline.track.includes("{");
-    $result.innerHTML =
-      '<div class="airline">' + airline.name + " (" + airline.iata + ")" + checkBadge + "</div>" +
-      '<div class="meta">' + p.awb + "</div>" +
-      '<a class="tracklink" href="' + url + '" target="_blank">Track on ' + airline.name + " →</a>" +
-      (prefilled
-        ? '<div class="hint">Opens with the AWB pre-filled. Also copied to clipboard just in case.</div>'
-        : '<div class="hint">This carrier’s site doesn’t accept URL pre-fill — AWB copied to clipboard, paste it there.</div>');
+    openTrackTrace(p.awb);
   }
+
+  let actions = "";
+  if (isDeepLink) {
+    actions =
+      '<a class="btn-main" href="' + official + '" target="_blank">Official site search ↗</a>' +
+      '<button class="alt btn-sec" onclick="openTrackTrace(\'' + p.awb + '\')">track-trace search</button>';
+  } else {
+    actions =
+      '<button class="alt btn-main" onclick="openTrackTrace(\'' + p.awb + '\')">track-trace search ↗</button>' +
+      (official ? '<a class="btn-sec" href="' + official + '" target="_blank">Official site (paste AWB)</a>' : "");
+  }
+
+  $result.innerHTML =
+    '<div class="airline">' + name + " (" + iata + ")" + checkBadge + "</div>" +
+    '<div class="meta">' + p.awb + "</div>" +
+    '<div class="actions">' + actions + "</div>" +
+    '<div class="hint">Search opened in a new tab automatically. AWB copied to clipboard.' +
+    (a ? "" : " Prefix not in database — using track-trace universal search.") + "</div>";
 
   navigator.clipboard && navigator.clipboard.writeText(p.awb).catch(() => {});
   saveRecent(p.awb);
