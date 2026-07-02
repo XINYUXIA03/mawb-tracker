@@ -377,7 +377,7 @@ const AIRLINES = {
   "881": ["Condor Cargo", "DE", "https://pathfinder.digitalfactory.aero/"],
   "901": ["TAB Bolivia", "B1", "https://www.tabairlines.com/"],
   "910": ["Oman Air Cargo", "WY", "https://omanair.smartkargo.com/"],
-  "921": ["SF Airlines", "O3", "https://www.sf-airlines.com/sfa/en/index.html"],
+  "921": ["SF Airlines", "O3", "https://www.sf-airlines.com/track/index.html"],
   "923": ["Corsair Cargo", "SS", "https://pathfinder.digitalfactory.aero/"],
   "932": ["Virgin Atlantic Cargo", "VS", "https://www.virginatlanticcargo.com/gb/en.html"],
   "933": ["Nippon Cargo Airlines", "KZ", "https://www.nca.aero/e/index.html"],
@@ -422,14 +422,14 @@ function buildURL(template, p) {
     .replaceAll("{awb}", p.awb);
 }
 
-// Backup search on track-trace.com: submit their tracking form (POST) in a
-// new tab. Covers airlines whose official site link is missing or broken.
-function openTrackTrace(awb) {
+// Submit a tracking form (POST) into a new tab. Used both for airlines whose
+// official site takes a plain POST (no CSRF token) and for track-trace.com.
+function submitPost(action, fields) {
   const f = document.createElement("form");
   f.method = "POST";
-  f.action = "https://www.track-trace.com/aircargo";
+  f.action = action;
   f.target = "_blank";
-  [["number", awb], ["config", "206300"], ["commit", "Track with options"]].forEach(([n, v]) => {
+  Object.entries(fields).forEach(([n, v]) => {
     const i = document.createElement("input");
     i.type = "hidden"; i.name = n; i.value = v;
     f.appendChild(i);
@@ -437,6 +437,26 @@ function openTrackTrace(awb) {
   document.body.appendChild(f);
   f.submit();
   f.remove();
+}
+
+function openTrackTrace(awb) {
+  submitPost("https://www.track-trace.com/aircargo",
+    { number: awb, config: "206300", commit: "Track with options" });
+}
+
+// Airlines whose official tracking accepts a direct POST (verified).
+// prefix: { url, fields } — {prefix}/{serial}/{awb} placeholders allowed.
+const POST_SEARCH = {
+  "071": { url: "https://cargo.ethiopianairlines.com/my-cargo/track-your-shipment/Index/",
+           fields: { AirwayBilNum: "{prefix}-{serial}" } },
+  "706": { url: "https://www.kqcargo.com/en/track-and-trace/",
+           fields: { awbpre: "{prefix}", awbnum: "{serial}" } },
+};
+
+function openPostSearch(spec, p) {
+  const fields = {};
+  Object.entries(spec.fields).forEach(([n, v]) => { fields[n] = buildURL(v, p); });
+  submitPost(buildURL(spec.url, p), fields);
 }
 
 function track() {
@@ -459,26 +479,33 @@ function track() {
     ? '<span class="badge ok">check digit ✓</span>'
     : '<span class="badge warn">check digit ✗ — possible typo</span>';
 
-  // Auto-open (user click = popup allowed): the airline's official tracking
-  // page when we have it, otherwise track-trace universal search.
-  if (official) {
+  const postSpec = POST_SEARCH[p.prefix];
+  window._last = p;
+
+  // Auto-open (user click = popup allowed), best method first:
+  // deep link > official POST search > official page > track-trace.
+  if (isDeepLink) {
+    window.open(official, "_blank");
+  } else if (postSpec) {
+    openPostSearch(postSpec, p);
+  } else if (official) {
     window.open(official, "_blank");
   } else {
     openTrackTrace(p.awb);
   }
 
   let actions = "";
-  if (official) {
-    actions =
-      '<a class="btn-main" href="' + official + '" target="_blank">Official site ↗</a>' +
-      '<button class="alt btn-sec" onclick="openTrackTrace(\'' + p.awb + '\')">Backup: track-trace</button>';
-  } else {
-    actions = '<button class="alt btn-main" onclick="openTrackTrace(\'' + p.awb + '\')">track-trace search ↗</button>';
+  if (postSpec) {
+    actions += '<button class="alt btn-main" onclick="openPostSearch(POST_SEARCH[_last.prefix], _last)">Official search ↗</button>';
+    if (official) actions += '<a class="btn-sec" href="' + official + '" target="_blank">Official site</a>';
+  } else if (official) {
+    actions += '<a class="btn-main" href="' + official + '" target="_blank">Official site ↗</a>';
   }
+  actions += '<button class="alt btn-sec" onclick="openTrackTrace(\'' + p.awb + '\')">Backup: track-trace</button>';
 
   let hint;
-  if (isDeepLink) {
-    hint = "Official tracking opened with the AWB pre-filled. Also copied to clipboard.";
+  if (isDeepLink || postSpec) {
+    hint = "Official tracking opened with the AWB searched automatically. Also copied to clipboard.";
   } else if (official) {
     hint = "Official tracking page opened — the AWB is copied, just paste it (Ctrl+V).";
   } else {
