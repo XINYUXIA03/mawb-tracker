@@ -459,6 +459,24 @@ function openPostSearch(spec, p) {
   submitPost(buildURL(spec.url, p), fields);
 }
 
+// What to copy to the clipboard, per airline. Default is the full dashed AWB
+// (e.g. 784-12345675). Sites that split prefix / number into separate fields
+// only need the 8-digit part; some want all 11 digits without the dash.
+//   "serial" -> 12345675     (prefix field is separate on the site)
+//   "nodash" -> 78412345675  (single field, no dash accepted)
+const CLIP_MODE = {
+  "784": "serial",   // China Southern: prefix + 8-digit fields
+  "999": "serial",   // Air China: prefix + 8-digit fields
+  "112": "nodash",   // China Cargo Airlines (ckair.com): 11 digits, no dash
+};
+
+function clipText(p) {
+  const mode = CLIP_MODE[p.prefix];
+  if (mode === "serial") return p.serial;
+  if (mode === "nodash") return p.prefix + p.serial;
+  return p.awb;
+}
+
 function track() {
   const p = parseAWB($awb.value);
   $result.className = "result show";
@@ -503,11 +521,13 @@ function track() {
   }
   actions += '<button class="alt btn-sec" onclick="openTrackTrace(\'' + p.awb + '\')">Backup: track-trace</button>';
 
+  const clip = clipText(p);
   let hint;
   if (isDeepLink || postSpec) {
     hint = "Official tracking opened with the AWB searched automatically. Also copied to clipboard.";
   } else if (official) {
-    hint = "Official tracking page opened — the AWB is copied, just paste it (Ctrl+V).";
+    hint = "Official tracking page opened — <b>" + clip + "</b> is copied, just paste it (Ctrl+V)" +
+      (CLIP_MODE[p.prefix] === "serial" ? " into the number field (prefix is separate on their site)." : ".");
   } else {
     hint = "No official link on file — track-trace universal search opened. AWB copied to clipboard.";
   }
@@ -518,7 +538,7 @@ function track() {
     '<div class="actions">' + actions + "</div>" +
     '<div class="hint">' + hint + "</div>";
 
-  navigator.clipboard && navigator.clipboard.writeText(p.awb).catch(() => {});
+  navigator.clipboard && navigator.clipboard.writeText(clip).catch(() => {});
   saveRecent(p.awb);
   renderRecent();
 }
